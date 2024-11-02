@@ -1,14 +1,11 @@
 use std::{
     ops::{Deref, DerefMut},
     pin::Pin,
-    sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex, MutexGuard,
-    },
+    sync::{Arc, Mutex, MutexGuard},
     task::{Context, Poll, Waker},
 };
 
-use futures::{task::AtomicWaker, Future};
+use futures::Future;
 use thiserror::Error;
 
 use crate::{
@@ -252,22 +249,22 @@ pub struct Overflow(usize);
 /// Receiver's flow controller for managing the flow limit of incoming stream data.
 #[derive(Debug, Default)]
 struct RecvController {
-    total_rcvd: AtomicU64,
-    max_data: AtomicU64,
+    total_rcvd: u64,
+    max_data: u64,
     step: u64,
-    is_closed: AtomicBool,
-    waker: AtomicWaker,
+    is_closed: bool,
+    waker: Option<Waker>,
 }
 
 impl RecvController {
     /// Creates a new [`RecvController`] with the specified `initial_max_data`.
     fn with_initial(initial_max_data: u64) -> Self {
         Self {
-            total_rcvd: AtomicU64::new(0),
-            max_data: AtomicU64::new(initial_max_data),
+            total_rcvd: 0,
+            max_data: initial_max_data,
             step: initial_max_data / 2,
-            is_closed: AtomicBool::new(false),
-            waker: AtomicWaker::new(),
+            is_closed: false,
+            waker: None,
         }
     }
 
@@ -276,15 +273,17 @@ impl RecvController {
     /// The data must be new, old retransmitted data does not count. Whether the data is
     /// new or not will be determined by each stream after delivering the data packet to them.
     /// The amount of new data will be passed as the `amount` parameter.
-    fn on_new_rcvd(&self, amount: usize) -> Result<usize, Overflow> {
-        debug_assert!(!self.is_closed.load(Ordering::Relaxed));
+    fn on_new_rcvd(&mut self, amount: usize) -> Result<usize, Overflow> {
+        debug_assert!(!self.is_closed);
 
-        self.total_rcvd.fetch_add(amount as u64, Ordering::Release);
-        let total_rcvd = self.total_rcvd.load(Ordering::Acquire);
-        let max_data = self.max_data.load(Ordering::Acquire);
+        self.total_rcvd += amount as u64;
+        let total_rcvd = self.total_rcvd;
+        let max_data = self.max_data;
         if total_rcvd <= max_data {
             if total_rcvd + self.step >= max_data {
-                self.waker.wake();
+                if let Some(waker) = self.waker.take() {
+                    waker.wake();
+                }
             }
             Ok(amount)
         } else {
@@ -293,31 +292,33 @@ impl RecvController {
     }
 
     /// Polls for an increase in the receive window limit.
-    fn poll_incr_limit(&self, cx: &mut Context<'_>) -> Poll<Option<MaxDataFrame>> {
-        if self.is_closed.load(Ordering::Acquire) {
+    fn poll_incr_limit(&mut self, cx: &mut Context<'_>) -> Poll<Option<MaxDataFrame>> {
+        if self.is_closed {
             Poll::Ready(None)
         } else {
-            let max_data = self.max_data.load(Ordering::Acquire);
-            let total_rcvd = self.total_rcvd.load(Ordering::Acquire);
+            let max_data = self.max_data;
+            let total_rcvd = self.total_rcvd;
 
             if total_rcvd + self.step >= max_data {
-                self.max_data.fetch_add(self.step, Ordering::Release);
+                self.max_data += self.step;
                 Poll::Ready(Some(MaxDataFrame {
-                    max_data: VarInt::from_u64(self.max_data.load(Ordering::Acquire))
+                    max_data: VarInt::from_u64(self.max_data)
                         .expect("max_data of flow controller is very very hard to exceed 2^62 - 1"),
                 }))
             } else {
-                self.waker.register(cx.waker());
+                self.waker = Some(cx.waker().clone());
                 Poll::Pending
             }
         }
     }
 
     /// Terminate the receiver's flow control.
-    fn terminate(&self) {
-        if !self.is_closed.swap(true, Ordering::Release) {
+    fn terminate(&mut self) {
+        if !core::mem::replace(&mut self.is_closed, true) {
             // Call wake() precisely once to prevent unnecessary wake-ups caused by multiple close calls.
-            self.waker.wake();
+            if let Some(waker) = self.waker.take() {
+                waker.wake();
+            }
         }
     }
 }
@@ -339,12 +340,17 @@ impl RecvController {
 /// to expand the receive window since more receive buffer space is freed up,
 /// and to inform the sender that more data can be sent.
 #[derive(Debug, Default, Clone)]
-pub struct ArcRecvController(Arc<RecvController>);
+pub struct ArcRecvController(Arc<Mutex<RecvController>>);
 
 impl ArcRecvController {
     /// Creates a new [`ArcRecvController`] with local `initial_max_data` transport parameter.
     pub fn with_initial(initial_max_data: u64) -> Self {
-        Self(Arc::new(RecvController::with_initial(initial_max_data)))
+        let controller = RecvController::with_initial(initial_max_data);
+        Self(Arc::new(Mutex::new(controller)))
+    }
+
+    fn lock_guard(&self) -> MutexGuard<RecvController> {
+        self.0.lock().unwrap()
     }
 
     /// Updates the total received data size and checks if the flow control limit is exceeded
@@ -353,19 +359,19 @@ impl ArcRecvController {
     /// As mentioned in [`ArcSendControler`], if the flow control limit is exceeded,
     /// an [`Overflow`] error will be returned.
     pub fn on_new_rcvd(&self, amount: usize) -> Result<usize, Overflow> {
-        self.0.on_new_rcvd(amount)
+        self.lock_guard().on_new_rcvd(amount)
     }
 
     /// Return a future that resolves when the receive window limit is increased.
     /// At that time, a [`MaxDataFrame`] needs to be sent to the sender.
     /// And this is a continuous monitoring process until the connection ends.
     pub fn incr_limit(&self) -> IncrLimit {
-        IncrLimit(self.0.clone())
+        IncrLimit(&self.0)
     }
 
     /// Terminate the receiver's flow control if QUIC connection error occurs.
     pub fn terminate(&self) {
-        self.0.terminate();
+        self.lock_guard().terminate();
     }
 }
 
@@ -388,13 +394,13 @@ impl ReceiveFrame<DataBlockedFrame> for ArcRecvController {
 ///
 /// At that time, a [`MaxDataFrame`] needs to be sent to the sender.
 /// And this is a continuous monitoring process until the connection ends.
-pub struct IncrLimit(Arc<RecvController>);
+pub struct IncrLimit<'r>(&'r Mutex<RecvController>);
 
-impl Future for IncrLimit {
+impl Future for IncrLimit<'_> {
     type Output = Option<MaxDataFrame>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.0.poll_incr_limit(cx)
+        self.0.lock().unwrap().poll_incr_limit(cx)
     }
 }
 
