@@ -1,8 +1,8 @@
 use std::{io, net::SocketAddr, sync::LazyLock};
 
-use bytes::BytesMut;
 use dashmap::DashMap;
 use deref_derive::Deref;
+use futures::StreamExt;
 use qbase::{
     cid::ConnectionId,
     packet::{header::GetDcid, Packet, PacketReader, RetryHeader, VersionNegotiationHeader},
@@ -19,6 +19,7 @@ pub mod server;
 
 pub use client::QuicClient;
 pub use qbase;
+pub use qcongestion;
 pub use qconnection;
 pub use qrecovery;
 pub use qunreliable;
@@ -66,19 +67,11 @@ impl Drop for QuicConnection {
 
 pub fn get_or_create_usc(bind_addr: &SocketAddr) -> io::Result<ArcUsc> {
     let recv_task = |usc: ArcUsc| async move {
-        let mut receiver = usc.receiver();
-        while let Ok(msg_count) = receiver.recv().await {
-            for (hdr, buf) in core::iter::zip(&receiver.headers, &receiver.iovecs).take(msg_count) {
-                let data: BytesMut = buf[0..hdr.seg_size as usize].into();
-                let pathway = Pathway::Direct {
-                    local: hdr.dst,
-                    remote: hdr.src,
-                };
-
-                let reader = PacketReader::new(data, 8);
-                for pkt in reader.flatten() {
-                    accpet_packet(pkt, pathway, &usc);
-                }
+        let mut datagrams = usc.recv_datagrams();
+        while let Some(Ok((data, pathway))) = datagrams.next().await {
+            let reader = PacketReader::new(data, 8);
+            for pkt in reader.flatten() {
+                accpet_packet(pkt, pathway, &usc);
             }
         }
     };

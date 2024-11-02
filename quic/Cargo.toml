@@ -13,7 +13,6 @@ qrecovery = { workspace = true }
 qcongestion = { workspace = true }
 qunreliable = { workspace = true }
 qconnection = { workspace = true }
-qudp = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }
 rustls = { workspace = true }
@@ -22,6 +21,7 @@ deref-derive = { workspace = true }
 dashmap = { workspace = true }
 
 [dev-dependencies]
+rustls = { workspace = true, features = ["ring"] }
 env_logger = { workspace = true }
 clap = { workspace = true }
 url = { workspace = true }

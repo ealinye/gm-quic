@@ -9,7 +9,7 @@ edition.workspace = true
 bytes = { workspace = true }
 socket2 = { workspace = true }
 libc = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
 log = { workspace = true }
 cfg-if = { workspace = true }
 

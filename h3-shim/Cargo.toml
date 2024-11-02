@@ -16,6 +16,7 @@ futures = { workspace = true }
 
 [dev-dependencies]
 tracing = "0.1"
+rustls = { workspace = true, features = ["ring"] }
 clap = { workspace = true, features = ["derive"] }
 rustls-native-certs = { version = "0.7" }
 log = { workspace = true }

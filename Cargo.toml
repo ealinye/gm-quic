@@ -15,10 +15,8 @@ default-members = [
     "qrecovery",
     "qconnection",
     "qcongestion",
-    "qudp",
-    "qunreliable",
+    "qunreliable", # TODO: option
     "quic",
-    "h3-shim",
 ]
 
 [workspace.package]
@@ -29,7 +27,11 @@ edition = "2021"
 futures = "0.3"
 rand = "0.8"
 bytes = "1"
-rustls = { version = "0.23", features = ["ring"] }
+rustls = { version = "0.23", default-features = false, features = [
+    "std",
+    "logging",
+    "tls12",
+] }
 rcgen = "0.13"
 thiserror = "1"
 getset = "0.1"
@@ -38,7 +40,7 @@ deref-derive = "0.1.0"
 socket2 = "0.5"
 libc = "0.2"
 nom = "7"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1" }
 log = "0.4"
 clap = { version = "4", features = ["derive"] }
 dashmap = "6"
@@ -53,34 +55,14 @@ windows-sys = { version = "0.59", features = [
 cfg-if = "1.0.0"
 h3 = "0.0.6"
 
+qbase = { path = "./qbase", version = "0.1.0" }
+qrecovery = { path = "./qrecovery", version = "0.1.0" }
+qconnection = { path = "./qconnection", version = "0.1.0" }
+qcongestion = { path = "./qcongestion", version = "0.1.0" }
+qunreliable = { path = "./qunreliable", version = "0.1.0" }
+quic = { path = "./quic", version = "0.1.0" }
+qudp = { path = "./qudp", version = "0.1.0" }
 
-[workspace.dependencies.qbase]
-path = "./qbase"
-version = "0.1.0"
-
-[workspace.dependencies.qrecovery]
-path = "./qrecovery"
-version = "0.1.0"
-
-[workspace.dependencies.qconnection]
-path = "./qconnection"
-version = "0.1.0"
-
-[workspace.dependencies.qcongestion]
-path = "./qcongestion"
-version = "0.1.0"
-
-[workspace.dependencies.qudp]
-path = "./qudp"
-version = "0.1.0"
-
-[workspace.dependencies.qunreliable]
-path = "./qunreliable"
-version = "0.1.0"
-
-[workspace.dependencies.quic]
-path = "./quic"
-version = "0.1.0"
 
 [profile.bench]
 debug = true

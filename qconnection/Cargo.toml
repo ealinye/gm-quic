@@ -7,15 +7,20 @@ edition.workspace = true
 
 [dependencies]
 futures = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt", "time", "macros", "sync"] }
 qbase = { workspace = true }
 qrecovery = { workspace = true }
 qcongestion = { workspace = true }
 qunreliable = { workspace = true }
-qudp = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }
 rustls = { workspace = true }
 log = { workspace = true }
 deref-derive = { workspace = true }
 dashmap = { workspace = true }
+
+[target.'cfg(not(gm_quic_no_qudp))'.dependencies]
+qudp = { workspace = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(gm_quic_no_qudp)'] }
